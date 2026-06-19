@@ -1,4 +1,4 @@
-# phalanx
+# Phalanx
 
 **A production-grade distributed key-value database built on Raft consensus.**
 
@@ -135,39 +135,6 @@ Measured on a single machine (state machine in isolation, no network):
 
 ---
 
-## Design decisions
-
-### Why custom Raft instead of a library?
-Every design decision in the consensus layer is directly interrogable in an interview.
-The implementation follows the etcd "library model" — the Raft engine is a pure state
-machine (no goroutines, no I/O); the surrounding RaftNode does all I/O and enforces
-ordering. This makes the algorithm testable without mocking networks.
-
-### Why segment-based WAL instead of a single file?
-Log compaction after snapshotting requires deleting superseded entries. Deleting the
-prefix of a single file requires copying the tail — O(n) work per compaction.
-Deleting entire sealed segments is O(deleted_segments). Segments also enable
-parallel reads from sealed segments during recovery.
-
-### Why CRC32C (Castagnoli) instead of MD5 or SHA?
-CRC32C has hardware acceleration on x86 (SSE4.2 `crc32` instruction) and ARM
-(CRC extension). It detects all single-bit and burst errors up to 32 bits.
-For storage integrity checking (not cryptographic security), it is strictly
-better than MD5 (slower, wrong use case) and SHA (much slower, wrong use case).
-
-### Why implement Prometheus format without the library?
-The exposition format is 12 lines of spec. Understanding it deeply matters for
-debugging metric cardinality issues, staleness, and histogram bucket design.
-Using the library hides the data model behind an API.
-
-### Why per-instance rand for election timeouts?
-A shared global `rand.Source` means all nodes draw from the same RNG state.
-In tests with many nodes, the entropy pool can produce correlated timeouts,
-causing systematic split votes. Per-instance seeding by node ID gives
-deterministic but uncorrelated timeouts across a cluster.
-
----
-
 ## Quick start
 
 ```bash
@@ -282,60 +249,3 @@ phalanx/
 
 ---
 
-## Interview reference
-
-**Q: What is the ordering requirement in the Raft Ready loop and why?**  
-WAL write must precede sending messages. If the leader sends AppendEntries, crashes
-before persisting, then restarts — followers have an entry the leader doesn't.
-The new election will likely not pick this node (its log is behind), so the entry is
-lost even though it was "replicated". fsync before ACK is the price of durability.
-
-**Q: Why does a new leader append a no-op entry?**  
-A new leader may have log entries from prior terms stored on a quorum but not yet
-committed (prior leader crashed before advancing commitIndex). Raft's safety rule
-requires that an entry can only be committed when the leader has replicated an entry
-from the *current* term to a quorum. The no-op satisfies this, causing all
-previously replicated-but-uncommitted entries to get committed transitively.
-
-**Q: Why is snapshot transmission chunked?**  
-A 1 GiB snapshot in a single TCP message would block the Raft heartbeat port for
-seconds, causing followers to time out and start elections. Chunking to 1 MiB
-allows heartbeats to interleave on the transport. etcd's rafthttp uses the same
-approach with HTTP range requests.
-
-**Q: How does the WGL linearizability checker work?**  
-It models each operation as an interval [start_time, end_time]. Two operations
-are concurrent if their intervals overlap; otherwise the earlier one must precede
-the later in any valid linearization. The checker uses backtracking: try placing
-each "minimal" operation (none completed before it started) first, apply its
-effect to the KV state, and recurse. If all branches fail, non-linearizable.
-Per-key decomposition reduces complexity from O(n!) to O(k × (n/k)!).
-
-**Q: What is the quorum for a 5-node cluster during joint consensus (adding a 6th)?**  
-Both `majority(C_old)=3` and `majority(C_new)=4` must agree. In practice this
-means 4 nodes must ACK a write during the joint period — the existing 3 + the
-new node. This eliminates the window where two independent majorities could
-elect different leaders simultaneously.
-
----
-
-## Resume bullets
-
-> Designed and implemented **phalanx**, a distributed key-value database in Go featuring
-> a from-scratch Raft consensus engine with pre-vote, check-quorum, pipeline replication
-> (256-message inflight window), and ReadIndex linearizable reads. Achieved 39K ops/sec
-> at p99=78µs on the state machine layer.
-
-> Built a **segment-based write-ahead log** with CRC32C per-frame integrity, atomic
-> snapshot persistence (write→fdatasync→rename), tail repair for crash recovery, and
-> log compaction that eliminates O(n) copy cost by deleting sealed segments.
-
-> Implemented a **WGL linearizability checker** that proves or disproves linearizability
-> over concurrent KV operation histories, with per-key decomposition and backtracking.
-> Used to validate correctness under four chaos scenarios: leader bounce, network
-> partition, minority leader isolation, and probabilistic message loss.
-
-> Built a **Prometheus-compatible metrics registry** from first principles (no library),
-> exposing 35+ Raft-specific metrics including proposal p99, WAL fsync p99, replication
-> lag per peer, and election duration. Deployed as a 3-node Kubernetes StatefulSet with
-> PodDisruptionBudget, zone anti-affinity, and rolling upgrade support.
