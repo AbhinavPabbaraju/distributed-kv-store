@@ -2,16 +2,11 @@
 
 **A production-grade distributed key-value database built on Raft consensus.**
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/phalanx-db/phalanx)](https://goreportcard.com/report/github.com/phalanx-db/phalanx)
-[![Tests](https://github.com/phalanx-db/phalanx/actions/workflows/test.yml/badge.svg)](https://github.com/phalanx-db/phalanx/actions/workflows/test.yml)
 
 Phalanx implements the complete Raft consensus algorithm from scratch in Go,
 backed by a custom segment-based WAL, a linearizability checker, a chaos testing
 framework, and a Prometheus-compatible metrics system — without any ORM, framework,
 or distributed systems library.
-
-This is not a tutorial project. Every design decision reflects what a production
-distributed database actually requires.
 
 ---
 
